@@ -1,0 +1,57 @@
+# 在公开仓 skyescn/hammer-update 里用 GITHUB_TOKEN 首推，包才会继承 public。
+# PAT 从本机直接 push 的 ghcr.io/skyescn/hammer-update/... 会停在 private。
+# 用法：先把镜像 PAT 推到 ghcr.io/skyescn/hammer-<name>:<tag>，再 workflow_dispatch。
+name: publish-customer-images
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "backend tag, e.g. v2.9.2"
+        required: true
+      gateway:
+        description: "gateway tag, e.g. v3.2.0"
+        required: true
+      admin_chat:
+        description: "admin_chat tag, e.g. v1.8.0"
+        required: true
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to pull PAT-private user-namespace images
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PULL_TOKEN }}
+      - name: Pull user-namespace images
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          docker pull "ghcr.io/${OWNER}/hammer-backend:${{ inputs.backend }}"
+          docker pull "ghcr.io/${OWNER}/hammer-gateway:${{ inputs.gateway }}"
+          docker pull "ghcr.io/${OWNER}/hammer-admin-chat:${{ inputs.admin_chat }}"
+      - name: Login with GITHUB_TOKEN so packages inherit public
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag and push into public repo namespace
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          copy() {
+            local name="$1" tag="$2"
+            docker tag "ghcr.io/${OWNER}/${name}:${tag}" "ghcr.io/${OWNER}/${REPO}/${name}:${tag}"
+            docker push "ghcr.io/${OWNER}/${REPO}/${name}:${tag}"
+          }
+          copy hammer-backend "${{ inputs.backend }}"
+          copy hammer-gateway "${{ inputs.gateway }}"
+          copy hammer-admin-chat "${{ inputs.admin_chat }}"
