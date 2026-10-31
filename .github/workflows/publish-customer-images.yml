@@ -1,6 +1,6 @@
-# 在公开仓 skyescn/hammer-update 里用 GITHUB_TOKEN 首推，包才会继承 public。
-# PAT 从本机直接 push 的 ghcr.io/skyescn/hammer-update/... 会停在 private。
-# 用法：先把镜像 PAT 推到 ghcr.io/skyescn/hammer-<name>:<tag>，再 workflow_dispatch。
+# PAT 首推 ghcr.io/<owner>/hammer-update/<image> 会停在 private 且不关联仓库。
+# 本 workflow 用 GITHUB_TOKEN 在公开仓命名空间重新推一次，包才会继承 public。
+# 用法：本机 release.sh 推完之后 workflow_dispatch，填三个 tag。
 name: publish-customer-images
 on:
   workflow_dispatch:
@@ -21,37 +21,43 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Login to pull PAT-private user-namespace images
+      - name: Login with PAT to pull private unlinked packages
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PULL_TOKEN }}
-      - name: Pull user-namespace images
+      - name: Pull current images
         env:
           OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          docker pull "ghcr.io/${OWNER}/hammer-backend:${{ inputs.backend }}"
-          docker pull "ghcr.io/${OWNER}/hammer-gateway:${{ inputs.gateway }}"
-          docker pull "ghcr.io/${OWNER}/hammer-admin-chat:${{ inputs.admin_chat }}"
+          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-backend:${{ inputs.backend }}"
+          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-gateway:${{ inputs.gateway }}"
+          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-admin-chat:${{ inputs.admin_chat }}"
+      - name: Delete unlinked private packages
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GH_PAGER: cat
+        run: |
+          set -euo pipefail
+          for pkg in hammer-update/hammer-backend hammer-update/hammer-gateway hammer-update/hammer-admin-chat; do
+            encoded="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$pkg")"
+            gh api --method DELETE "/user/packages/container/${encoded}" || true
+          done
       - name: Login with GITHUB_TOKEN so packages inherit public
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Tag and push into public repo namespace
+      - name: Push into public repo namespace
         env:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          copy() {
-            local name="$1" tag="$2"
-            docker tag "ghcr.io/${OWNER}/${name}:${tag}" "ghcr.io/${OWNER}/${REPO}/${name}:${tag}"
-            docker push "ghcr.io/${OWNER}/${REPO}/${name}:${tag}"
-          }
-          copy hammer-backend "${{ inputs.backend }}"
-          copy hammer-gateway "${{ inputs.gateway }}"
-          copy hammer-admin-chat "${{ inputs.admin_chat }}"
+          docker push "ghcr.io/${OWNER}/${REPO}/hammer-backend:${{ inputs.backend }}"
+          docker push "ghcr.io/${OWNER}/${REPO}/hammer-gateway:${{ inputs.gateway }}"
+          docker push "ghcr.io/${OWNER}/${REPO}/hammer-admin-chat:${{ inputs.admin_chat }}"
