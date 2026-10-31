@@ -1,6 +1,5 @@
-# PAT 首推 ghcr.io/<owner>/hammer-update/<image> 会停在 private 且不关联仓库。
-# 本 workflow 用 GITHUB_TOKEN 在公开仓命名空间重新推一次，包才会继承 public。
-# 用法：本机 release.sh 推完之后 workflow_dispatch，填三个 tag。
+# PAT 首推会停在 private 且不关联仓库。GITHUB_TOKEN 在公开仓里碰一次包，
+# 就会建成 public 并挂上本仓库；随后本机 PAT 再推正式 tag，客户才能免登录 pull。
 name: publish-customer-images
 on:
   workflow_dispatch:
@@ -15,49 +14,30 @@ on:
         description: "admin_chat tag, e.g. v1.8.0"
         required: true
 jobs:
-  copy:
+  link-packages:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Login with PAT to pull private unlinked packages
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PULL_TOKEN }}
-      - name: Pull current images
-        env:
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
-          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-backend:${{ inputs.backend }}"
-          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-gateway:${{ inputs.gateway }}"
-          docker pull "ghcr.io/${OWNER}/${REPO}/hammer-admin-chat:${{ inputs.admin_chat }}"
-      - name: Delete unlinked private packages
-        env:
-          GH_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
-          GH_PAGER: cat
-        run: |
-          set -euo pipefail
-          for pkg in hammer-update/hammer-backend hammer-update/hammer-gateway hammer-update/hammer-admin-chat; do
-            encoded="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$pkg")"
-            gh api --method DELETE "/user/packages/container/${encoded}" || true
-          done
-      - name: Login with GITHUB_TOKEN so packages inherit public
+      - name: Login with GITHUB_TOKEN
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push into public repo namespace
+      - name: Touch packages so they inherit public from this repo
         env:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          docker push "ghcr.io/${OWNER}/${REPO}/hammer-backend:${{ inputs.backend }}"
-          docker push "ghcr.io/${OWNER}/${REPO}/hammer-gateway:${{ inputs.gateway }}"
-          docker push "ghcr.io/${OWNER}/${REPO}/hammer-admin-chat:${{ inputs.admin_chat }}"
+          docker pull alpine:3.20
+          touch_pkg() {
+            local name="$1" tag="$2"
+            docker tag alpine:3.20 "ghcr.io/${OWNER}/${REPO}/${name}:${tag}-link"
+            docker push "ghcr.io/${OWNER}/${REPO}/${name}:${tag}-link" || true
+          }
+          touch_pkg hammer-backend "${{ inputs.backend }}"
+          touch_pkg hammer-gateway "${{ inputs.gateway }}"
+          touch_pkg hammer-admin-chat "${{ inputs.admin_chat }}"
